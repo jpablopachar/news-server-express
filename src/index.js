@@ -2,6 +2,7 @@ import cors from 'cors'
 import express from 'express'
 import morgan from 'morgan'
 import { CLIENT_URL, FRONTEND_URL, PORT } from './config.js'
+import { authRoute } from './routes/authRoute.js'
 import { dbConnect } from './utils/db.js'
 
 const corsOptions = {
@@ -15,6 +16,8 @@ app.use(express.json())
 app.use(express.urlencoded({ extended: false }))
 app.use(morgan('dev'))
 app.use(cors(corsOptions))
+
+app.use('/api', authRoute)
 
 dbConnect().then(() => {
   app.listen(PORT, () => {
