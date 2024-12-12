@@ -9,6 +9,7 @@ import {
   SECRET,
 } from '../config.js'
 import Auth from '../models/auth.js'
+import { handleServerError, validateRequiredFields } from '../utils/general.js'
 import { responseReturn } from '../utils/res.js'
 
 cloudinary.config({
@@ -22,8 +23,10 @@ export class AuthController {
   login = async (req, res) => {
     const { email, password } = req.body
 
-    if (!email || !password)
-      return responseReturn(res, 400, { error: 'Email and password required' })
+    validateRequiredFields(res, 500, {
+      email: 'Email is required',
+      password: 'Password is required',
+    })
 
     try {
       const user = await Auth.findOne({ email }).select('+password')
@@ -35,40 +38,37 @@ export class AuthController {
       if (!passwordMatch)
         return responseReturn(res, 401, { error: 'Invalid password' })
 
-      const payload = {
-        id: user.id,
-        name: user.name,
-        category: user.category,
-        role: user.role,
-      }
-
-      const token = sign(payload, SECRET, { expiresIn: '1d' })
+      const token = sign(
+        {
+          id: user.id,
+          name: user.name,
+          category: user.category,
+          role: user.role,
+        },
+        SECRET,
+        { expiresIn: '1d' }
+      )
 
       return responseReturn(res, 200, { message: 'Login successful', token })
     } catch (error) {
-      console.error('Error in login', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'login')
     }
   }
 
   addWriter = async (req, res) => {
     const { email, name, password, category } = req.body
 
-    if (!name) return responseReturn(res, 400, { error: 'Name is required' })
-
-    if (!email) return responseReturn(res, 400, { error: 'Email is required' })
-
-    if (!password)
-      return responseReturn(res, 400, { error: 'Password is required' })
-
-    if (!category)
-      return responseReturn(res, 400, { error: 'Category is required' })
+    validateRequiredFields(res, {
+      name: 'Name is required',
+      email: 'Email is required',
+      password: 'Password is required',
+      category: 'Category is required',
+    })
 
     try {
-      const writer = await Auth.findOne({ email: email.trim() })
+      const existingWriter = await Auth.findOne({ email: email.trim() })
 
-      if (writer)
+      if (existingWriter)
         return responseReturn(res, 400, { error: 'Writer already exists' })
 
       const newWriter = new Auth.create({
@@ -84,9 +84,7 @@ export class AuthController {
         writer: newWriter,
       })
     } catch (error) {
-      console.error('Error in addWriter', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'addWriter')
     }
   }
 
@@ -98,50 +96,44 @@ export class AuthController {
 
       return responseReturn(res, 200, { writers })
     } catch (error) {
-      console.error('Error in getWriters', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'getWriters')
     }
   }
 
   getWriterById = async (req, res) => {
-    const { id } = req.params
-
     try {
-      const writer = await Auth.findById(id)
+      const writer = await Auth.findById(req.params.id)
 
       if (!writer)
         return responseReturn(res, 404, { error: 'Writer not found' })
 
       return responseReturn(res, 200, { writer })
     } catch (error) {
-      console.error('Error in getWriterById', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'getWriterById')
     }
   }
 
   updateWriter = async (req, res) => {
     const { name, email, category, role } = req.body
 
-    const { id } = req.params
+    validateRequiredFields(res, {
+      name: 'Name is required',
+      email: 'Email is required',
+      category: 'Category is required',
+    })
 
-    if (!name) return responseReturn(res, 400, { error: 'Name is required' })
-
-    if (!email) return responseReturn(res, 400, { error: 'Email is required' })
-
-    if (!category)
-      return responseReturn(res, 400, { error: 'Category is required' })
     try {
-      const writer = await Auth.findById(id)
+      const writer = await Auth.findById(req.params.id)
 
       if (!writer)
         return responseReturn(res, 404, { error: 'Writer not found' })
 
-      writer.name = name.trim()
-      writer.email = email.trim()
-      writer.category = category.trim()
-      writer.role = role.trim()
+      Object.assign(writer, {
+        name: name.trim(),
+        email: email.trim(),
+        category: category.trim(),
+        role: role?.trim(),
+      })
 
       await writer.save()
 
@@ -150,17 +142,13 @@ export class AuthController {
         writer,
       })
     } catch (error) {
-      console.error('Error in updateWriter', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'updateWriter')
     }
   }
 
   deleteWriter = async (req, res) => {
-    const { id } = req.params
-
     try {
-      const writer = await Auth.findByIdAndDelete(id)
+      const writer = await Auth.findByIdAndDelete(req.params.id)
 
       if (!writer)
         return responseReturn(res, 404, { error: 'Writer not found' })
@@ -169,9 +157,7 @@ export class AuthController {
         message: 'Writer deleted successfully',
       })
     } catch (error) {
-      console.error('Error in deleteWriter', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'deleteWriter')
     }
   }
 
@@ -187,6 +173,7 @@ export class AuthController {
 
       try {
         const name = Array.isArray(fields.name) ? fields.name[0] : fields.name
+
         const email = Array.isArray(fields.email)
           ? fields.email[0]
           : fields.email
@@ -225,9 +212,7 @@ export class AuthController {
           user: updateUser,
         })
       } catch (error) {
-        console.error('Error in updateProfile', error)
-
-        return responseReturn(res, 500, { error: 'Internal server error' })
+        return handleServerError(res, error, 'updateProfile')
       }
     })
   }
@@ -244,25 +229,20 @@ export class AuthController {
 
       return responseReturn(res, 200, { user })
     } catch (error) {
-      console.error('Error in getProfile', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'getProfile')
     }
   }
 
   changePassword = async (req, res) => {
     const { oldPassword, newPassword } = req.body
 
-    const { id } = req.params
-
-    if (!oldPassword)
-      return responseReturn(res, 400, { error: 'Old password required' })
-
-    if (!newPassword)
-      return responseReturn(res, 400, { error: 'New password required' })
+    validateRequiredFields(res, {
+      oldPassword: 'Old password is required',
+      newPassword: 'New password is required',
+    })
 
     try {
-      const user = await Auth.findById(id).select('+password')
+      const user = await Auth.findById(req.params.id).select('+password')
 
       if (!user) return responseReturn(res, 404, { error: 'User not found' })
 
@@ -271,11 +251,7 @@ export class AuthController {
       if (!passwordMatch)
         return responseReturn(res, 401, { error: 'Invalid old password' })
 
-      const salt = await genSalt(10)
-
-      const hashedPassword = await hash(newPassword, salt)
-
-      user.password = hashedPassword
+      user.password = await hash(newPassword, await genSalt(10))
 
       await user.save()
 
@@ -283,9 +259,7 @@ export class AuthController {
         message: 'Password changed successfully',
       })
     } catch (error) {
-      console.error('Error in changePassword', error)
-
-      return responseReturn(res, 500, { error: 'Internal server error' })
+      return handleServerError(res, error, 'changePassword')
     }
   }
 }
