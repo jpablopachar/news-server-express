@@ -3,11 +3,16 @@ import formidable from 'formidable'
 import moment from 'moment'
 import { mongo } from 'mongoose'
 import { CLOUD_API_KEY, CLOUD_API_SECRET, CLOUD_NAME } from '../config.js'
+import { NEWS_STATUS } from '../constants/newsStatus.js'
 import { ROLES } from '../constants/roles.js'
 import Auth from '../models/auth.js'
 import Gallery from '../models/gallery.js'
 import News from '../models/news.js'
-import { handleServerError } from '../utils/general.js'
+import {
+  deleteImageFromCloudinary,
+  handleServerError,
+  uploadImageToCloudinary,
+} from '../utils/general.js'
 import { responseReturn } from '../utils/res.js'
 
 cloudinary.config({
@@ -18,6 +23,10 @@ cloudinary.config({
 })
 
 export class NewsController {
+  #createSlug(title) {
+    return title.trim().toLowerCase().replace(/\s+/g, '-')
+  }
+
   addNews = async (req, res) => {
     const { id, name, category } = req.userInfo
 
@@ -25,21 +34,20 @@ export class NewsController {
 
     try {
       const [fields, files] = await form.parse(req)
-      const { url } = await cloudinary.uploader.upload(
+      const imageUrl = await uploadImageToCloudinary(
         files.image[0].filepath,
-        { folder: 'news_images' }
+        'news_images'
       )
-      const { title, description } = fields
 
       const news = await News.create({
         writerId: id,
         writerName: name,
-        title: title[0].trim(),
-        slug: title[0].trim().split(' ').join('-'),
+        title: fields.title[0].trim(),
+        slug: this.#createSlug(fields.title[0]),
         category,
-        description: description[0],
+        description: fields.description[0],
         date: moment().format('LL'),
-        image: url,
+        image: imageUrl,
       })
 
       return responseReturn(res, 201, { message: 'News added', news })
@@ -52,7 +60,9 @@ export class NewsController {
     try {
       const images = await Gallery.find({
         writerId: mongo.ObjectId.createFromHexString(req.userInfo.id),
-      }).sort({ createdAt: -1 })
+      })
+        .sort({ createdAt: -1 })
+        .lean()
 
       return responseReturn(res, 200, { images })
     } catch (error) {
@@ -69,21 +79,19 @@ export class NewsController {
       const [, files] = await form.parse(req)
       const { images } = files
 
-      let allImages = []
+      const uploadPromises = images.map(async (image) => {
+        const url = await uploadImageToCloudinary(image.filepath, 'news_images')
 
-      for (let i = 0; i < images.length; i++) {
-        const { url } = await cloudinary.uploader.upload(images[i].filepath, {
-          folder: 'news_images',
-        })
+        return { writerId: id, url }
+      })
 
-        allImages.push({ writerId: id, url })
-      }
+      const uploadedImages = await Promise.all(uploadPromises)
 
-      const image = await Gallery.insertMany(allImages)
+      const savedImages = await Gallery.insertMany(uploadedImages)
 
       return responseReturn(res, 201, {
         message: 'Images added',
-        images: image,
+        images: savedImages,
       })
     } catch (error) {
       return handleServerError(res, error, 'addImages')
@@ -94,17 +102,14 @@ export class NewsController {
     const { id, role } = req.userInfo
 
     try {
-      if (role === ROLES.ADMIN) {
-        const news = await News.find().sort({ createdAt: -1 })
+      const query =
+        role === ROLES.ADMIN
+          ? {}
+          : { writerId: mongo.ObjectId.createFromHexString(id) }
 
-        return responseReturn(res, 200, { news })
-      } else {
-        const news = await News.find({
-          writerId: mongo.ObjectId.createFromHexString(id),
-        }).sort({ createdAt: -1 })
+      const news = await News.find(query).sort({ createdAt: -1 }).lean()
 
-        return responseReturn(res, 200, { news })
-      }
+      return responseReturn(res, 200, { news })
     } catch (error) {
       return handleServerError(res, error, 'getDashboardNews')
     }
@@ -131,36 +136,33 @@ export class NewsController {
 
     try {
       const [fields, files] = await form.parse(req)
-      const { title, description } = fields
 
-      let url = fields.oldImage[0]
+      let imageUrl = fields.oldImage[0]
 
-      if (Object.keys(files).length > 0) {
-        const spliteImage = url.split('/')
-        const imagesFile = spliteImage[spliteImage.length - 1].split('.')[0]
+      if (files.newImage?.[0]?.filepath) {
+        await deleteImageFromCloudinary(imageUrl)
 
-        await cloudinary.uploader.destroy(imagesFile)
-
-        const data = await cloudinary.uploader.upload(
-          files.new_image[0].filepath,
-          { folder: 'news_images' }
+        imageUrl = await uploadImageToCloudinary(
+          files.newImage[0].filepath,
+          'news_images'
         )
-
-        url = data.url
       }
 
-      const news = await News.findByIdAndUpdate(
+      const updateNews = await News.findByIdAndUpdate(
         newsId,
         {
-          title: title[0].trim(),
-          slug: title[0].trim().split(' ').join('-'),
-          description: description[0],
-          image: url,
+          title: fields.title[0].trim(),
+          slug: this.#createSlug(fields.title[0]),
+          description: fields.description[0],
+          image: imageUrl,
         },
         { new: true }
       )
 
-      return responseReturn(res, 200, { message: 'News updated', news })
+      return responseReturn(res, 200, {
+        message: 'News updated',
+        news: updateNews,
+      })
     } catch (error) {
       return handleServerError(res, error, 'updateNews')
     }
@@ -174,23 +176,7 @@ export class NewsController {
 
       if (!news) return responseReturn(res, 404, { error: 'News not found' })
 
-      const publicId = news.image.split('/').pop().split('.')[0]
-
-      await cloudinary.uploader.destroy(
-        `news_images/${publicId}`,
-        (error, result) => {
-          if (error) {
-            console.log('error deleting image from cloudinary', error)
-
-            return responseReturn(res, 500, {
-              message: 'Failed to delete image form cloudinary',
-            })
-          }
-
-          console.log('Image deleted from Cloudinary', result)
-        }
-      )
-
+      await deleteImageFromCloudinary(news.image)
       await News.findByIdAndDelete(newsId)
 
       return responseReturn(res, 200, {
@@ -226,15 +212,9 @@ export class NewsController {
 
   getAllNews = async (req, res) => {
     try {
-      const categoryNews = await News.aggregate([
-        {
-          $sort: { createdAt: -1 },
-        },
-        {
-          $match: {
-            status: 'active',
-          },
-        },
+      const pipeline = [
+        { $match: { status: NEWS_STATUS.ACTIVE } },
+        { $sort: { createdAt: -1 } },
         {
           $group: {
             _id: '$category',
@@ -256,18 +236,16 @@ export class NewsController {
           $project: {
             _id: 0,
             category: '$_id',
-            news: {
-              $slice: ['$news', 5],
-            },
+            news: { $slice: ['$news', 5] },
           },
         },
-      ])
+      ]
 
-      const news = {}
+      const categoryNews = await News.aggregate(pipeline)
 
-      for (let i = 0; i < categoryNews.length; i++) {
-        news[categoryNews[i].category] = categoryNews[i].news
-      }
+      const news = Object.fromEntries(
+        categoryNews.map(({ category, news }) => [category, news])
+      )
 
       return responseReturn(res, 200, { news })
     } catch (error) {
@@ -348,7 +326,7 @@ export class NewsController {
           },
           {
             status: {
-              $eq: 'active',
+              $eq: NEWS_STATUS.ACTIVE,
             },
           },
         ],
@@ -362,9 +340,10 @@ export class NewsController {
 
   getPopularNews = async (_, res) => {
     try {
-      const popularNews = await News.find({ status: 'active' })
+      const popularNews = await News.find({ status: NEWS_STATUS.ACTIVE })
         .sort({ count: -1 })
         .limit(4)
+        .lean()
 
       return responseReturn(res, 200, { popularNews })
     } catch (error) {
@@ -374,7 +353,7 @@ export class NewsController {
 
   getLatestNews = async (_, res) => {
     try {
-      const news = await News.find({ status: 'active' })
+      const news = await News.find({ status: NEWS_STATUS.ACTIVE })
         .sort({ createdAt: -1 })
         .limit(5)
 
@@ -386,7 +365,7 @@ export class NewsController {
 
   getRecentNews = async (_, res) => {
     try {
-      const news = await News.find({ status: 'active' })
+      const news = await News.find({ status: NEWS_STATUS.ACTIVE })
         .sort({ createdAt: -1 })
         .skip(6)
         .limit(5)
@@ -402,7 +381,7 @@ export class NewsController {
       const images = await News.aggregate([
         {
           $match: {
-            status: 'active',
+            status: NEWS_STATUS.ACTIVE,
           },
         },
         {
@@ -433,7 +412,7 @@ export class NewsController {
       const news = await News.find({
         status: 'active',
         title: { $regex: value, $options: 'i' },
-      })
+      }).lean()
 
       return responseReturn(res, 200, { news })
     } catch (error) {
@@ -443,11 +422,19 @@ export class NewsController {
 
   newsStatistics = async (_, res) => {
     try {
-      const totalNews = await News.countDocuments()
-      const totalPendingNews = await News.countDocuments({ status: 'pending' })
-      const totalActiveNews = await News.countDocuments({ status: 'active' })
-      const deactiveNews = await News.countDocuments({ status: 'deactive' })
-      const totalWriters = await Auth.countDocuments({ role: 'writer' })
+      const [
+        totalNews,
+        totalPendingNews,
+        totalActiveNews,
+        deactiveNews,
+        totalWriters,
+      ] = await Promise.all([
+        News.countDocuments(),
+        News.countDocuments({ status: NEWS_STATUS.PENDING }),
+        News.countDocuments({ status: NEWS_STATUS.ACTIVE }),
+        News.countDocuments({ status: NEWS_STATUS.DEACTIVE }),
+        Auth.countDocuments({ role: ROLES.WRITER }),
+      ])
 
       return responseReturn(res, 200, {
         totalNews,
