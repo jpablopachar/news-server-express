@@ -1,7 +1,7 @@
 import { compare, genSalt, hash } from 'bcrypt'
 import { v2 as cloudinary } from 'cloudinary'
 import formidable from 'formidable'
-import { sign } from 'jsonwebtoken'
+import pkg from 'jsonwebtoken'
 import {
   CLOUD_API_KEY,
   CLOUD_API_SECRET,
@@ -11,6 +11,8 @@ import {
 import Auth from '../models/auth.js'
 import { handleServerError, validateRequiredFields } from '../utils/general.js'
 import { responseReturn } from '../utils/res.js'
+
+const { sign } = pkg
 
 cloudinary.config({
   cloud_name: CLOUD_NAME,
@@ -71,7 +73,7 @@ export class AuthController {
       if (existingWriter)
         return responseReturn(res, 400, { error: 'Writer already exists' })
 
-      const newWriter = new Auth.create({
+      const newWriter = await Auth.create({
         name: name.trim(),
         email: email.trim(),
         password: await hash(password.trim(), 10),

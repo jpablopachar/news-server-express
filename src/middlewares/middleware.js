@@ -1,8 +1,10 @@
-import { verify } from 'jsonwebtoken'
+import pkg from 'jsonwebtoken'
 import { SECRET } from '../config.js'
 import { ROLES } from '../constants/roles.js'
 import { handleServerError } from '../utils/general.js'
 import { responseReturn } from '../utils/res.js'
+
+const { verify } = pkg
 
 export class Middleware {
   auth = async (req, res, next) => {
