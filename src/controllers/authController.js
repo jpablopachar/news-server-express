@@ -186,7 +186,7 @@ export class AuthController {
         if (!email)
           return responseReturn(res, 400, { error: 'Email is required' })
 
-        let updateData = { name: name.trim(), email: ElementInternals.trim() }
+        let updateData = { name: name.trim(), email: email.trim() }
 
         const uploadedImage = Array.isArray(files.image)
           ? files.image[0]
